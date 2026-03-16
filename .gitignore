@@ -1,0 +1,5 @@
+.env
+vector.index
+texts.pkl
+__pycache__/
+*.pyc
