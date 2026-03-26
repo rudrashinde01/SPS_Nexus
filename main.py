@@ -9,7 +9,6 @@ import faiss
 import pickle
 import re
 import os
-import uvicorn
 
 # Load .env file
 load_dotenv()
@@ -24,28 +23,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Lazy load models after server starts ──
+# ── Lazy load variables ──
 embed_model = None
 index = None
 texts = None
 
-@app.on_event("startup")
-async def startup_event():
+# ── Lazy load function (FIX) ──
+def load_models():
     global embed_model, index, texts
-    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-    index = faiss.read_index("vector.index")
-    with open("texts.pkl", "rb") as f:
-        texts = pickle.load(f)
+    if embed_model is None:
+        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    if index is None:
+        index = faiss.read_index("vector.index")
+    if texts is None:
+        with open("texts.pkl", "rb") as f:
+            texts = pickle.load(f)
 
-# Key loads from .env — never in code!
+# Key loads from .env
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
 
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[Dict[str, str]]] = []
     studentProfile: Optional[Dict[str, str]] = {}
-
 
 GREETINGS = [
     "hi", "hello", "hey", "hii", "helo", "hlo",
@@ -89,24 +89,22 @@ ADMIN_PATTERNS = [
 
 def is_greeting(message: str) -> bool:
     msg = message.lower().strip()
-    return msg in GREETINGS or any(
-        msg.startswith(g) for g in GREETINGS
-    )
+    return msg in GREETINGS or any(msg.startswith(g) for g in GREETINGS)
 
 def is_admin_query(message: str) -> bool:
     for pattern in ADMIN_PATTERNS:
-        if re.search(pattern, message.lower()):\
+        if re.search(pattern, message.lower()):
             return True
     return False
-
 
 @app.get("/")
 async def root():
     return {"status": "Nexus AI server is running!"}
 
-
 @app.post("/chat")
 async def chat(req: ChatRequest):
+    load_models()  # 🔥 IMPORTANT FIX
+
     msg = req.message.strip()
 
     if is_greeting(msg):
@@ -156,9 +154,3 @@ Rules:
 
     reply = response.choices[0].message.content.strip()
     return {"reply": reply}
-
-
-# ── This is the fix for Render deployment ──
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
