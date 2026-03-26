@@ -9,6 +9,7 @@ import faiss
 import pickle
 import re
 import os
+import threading
 
 # Load .env file
 load_dotenv()
@@ -23,24 +24,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Lazy load variables ──
+# ── Global variables ──
 embed_model = None
 index = None
 texts = None
 
-# ── Lazy load function (FIX) ──
-def load_models():
-    global embed_model, index, texts
-    try:
-        if embed_model is None:
+# ── Load only index + texts first (FAST) ──
+def load_basic():
+    global index, texts
+    if index is None:
+        index = faiss.read_index("vector.index")
+    if texts is None:
+        with open("texts.pkl", "rb") as f:
+            texts = pickle.load(f)
+
+# ── Load model separately (HEAVY) ──
+def load_model():
+    global embed_model
+    if embed_model is None:
+        try:
             embed_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
-        if index is None:
-            index = faiss.read_index("vector.index")
-        if texts is None:
-            with open("texts.pkl", "rb") as f:
-                texts = pickle.load(f)
-    except Exception as e:
-        print("Model load error:", e)
+            print("✅ Model loaded")
+        except Exception as e:
+            print("❌ Model load error:", e)
+
+# ── Background loading (NON-BLOCKING) ──
+def preload():
+    load_basic()
+    load_model()
+
+threading.Thread(target=preload).start()
 
 # Key loads from .env
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -100,13 +113,22 @@ def is_admin_query(message: str) -> bool:
             return True
     return False
 
+# ✅ Fast route (for Render port detection)
 @app.get("/")
 async def root():
     return {"status": "Nexus AI server is running!"}
 
+# ✅ Optional ping
+@app.get("/ping")
+async def ping():
+    return {"status": "ok"}
+
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    load_models()  # 🔥 IMPORTANT FIX
+    load_basic()  # fast load
+
+    if embed_model is None:
+        return {"reply": "Server is starting... please try again in a few seconds."}
 
     msg = req.message.strip()
 
@@ -117,7 +139,7 @@ async def chat(req: ChatRequest):
 
     if is_admin_query(msg):
         return {
-            "reply": "For this information please check the **SPS Nexus app**! You can find it in the relevant section of your dashboard. 📱"
+            "reply": "For this information please check the SPS Nexus app!"
         }
 
     vector = embed_model.encode([msg])
@@ -128,7 +150,7 @@ async def chat(req: ChatRequest):
 
     if not context.strip():
         return {
-            "reply": "Sorry! This topic is not in my diploma syllabus. Please ask me about your MSBTE subjects!"
+            "reply": "This topic is outside my diploma syllabus."
         }
 
     response = client.chat.completions.create(
@@ -136,22 +158,14 @@ async def chat(req: ChatRequest):
         messages=[
             {
                 "role": "system",
-                "content": """You are Nexus AI, a friendly academic assistant for MSBTE diploma students in Maharashtra, India.
-Rules:
-- Answer ONLY from the study material given
-- Give clear and simple answers for diploma students
-- Use bullet points where needed
-- Do NOT repeat the question
-- Do NOT show Context or Question labels
-- If topic not in study material say: This topic is outside my diploma syllabus. Please ask about your MSBTE subjects!
-- Keep answer short and to the point"""
+                "content": "You are Nexus AI. Answer only from study material. Keep answers short."
             },
             {
                 "role": "user",
                 "content": f"Study material:\n{context}\n\nQuestion: {msg}"
             }
         ],
-        max_tokens=1024,
+        max_tokens=512,
         temperature=0.3,
     )
 
