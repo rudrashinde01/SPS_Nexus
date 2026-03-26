@@ -24,11 +24,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+# ── Lazy load models after server starts ──
+embed_model = None
+index = None
+texts = None
 
-index = faiss.read_index("vector.index")
-with open("texts.pkl", "rb") as f:
-    texts = pickle.load(f)
+@app.on_event("startup")
+async def startup_event():
+    global embed_model, index, texts
+    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    index = faiss.read_index("vector.index")
+    with open("texts.pkl", "rb") as f:
+        texts = pickle.load(f)
 
 # Key loads from .env — never in code!
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -88,9 +95,14 @@ def is_greeting(message: str) -> bool:
 
 def is_admin_query(message: str) -> bool:
     for pattern in ADMIN_PATTERNS:
-        if re.search(pattern, message.lower()):
+        if re.search(pattern, message.lower()):\
             return True
     return False
+
+
+@app.get("/")
+async def root():
+    return {"status": "Nexus AI server is running!"}
 
 
 @app.post("/chat")
@@ -148,5 +160,5 @@ Rules:
 
 # ── This is the fix for Render deployment ──
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
