@@ -31,13 +31,16 @@ texts = None
 # ── Lazy load function (FIX) ──
 def load_models():
     global embed_model, index, texts
-    if embed_model is None:
-        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-    if index is None:
-        index = faiss.read_index("vector.index")
-    if texts is None:
-        with open("texts.pkl", "rb") as f:
-            texts = pickle.load(f)
+    try:
+        if embed_model is None:
+            embed_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+        if index is None:
+            index = faiss.read_index("vector.index")
+        if texts is None:
+            with open("texts.pkl", "rb") as f:
+                texts = pickle.load(f)
+    except Exception as e:
+        print("Model load error:", e)
 
 # Key loads from .env
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
